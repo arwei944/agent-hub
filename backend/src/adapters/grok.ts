@@ -1,9 +1,12 @@
-import { readFile, access } from 'fs/promises';
+import { readFile, access, readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { AgentId, AgentConfig, AgentSession, AgentState } from '../models/agent';
 import { AgentAdapter } from './interface';
 import { parse as parseToml } from './toml-lite';
+import { serializeToml } from '../utils/toml-serializer';
+import { atomicWrite } from '../utils/atomic-write';
+import { stat } from 'fs/promises';
 
 export class GrokAdapter implements AgentAdapter {
   readonly id: AgentId = 'grok';
@@ -34,13 +37,51 @@ export class GrokAdapter implements AgentAdapter {
     };
   }
 
-  async writeConfig(_config: AgentConfig): Promise<void> {
-    console.warn('[grok] writeConfig not yet implemented');
+  async writeConfig(config: AgentConfig): Promise<void> {
+    const raw = { ...config.raw };
+    if (config.model !== undefined) raw.model = config.model;
+    if (config.endpoint !== undefined) {
+      raw.apiBase = config.endpoint;
+      raw.endpoint = config.endpoint;
+    }
+    await atomicWrite(this.getConfigPath(), serializeToml(raw));
   }
 
-  async readRecentSessions(_limit = 20): Promise<AgentSession[]> {
-    // Phase 2: 读取 ~/.grok/sessions/ (JSONL)
-    return [];
+  async readRecentSessions(limit = 20): Promise<AgentSession[]> {
+    const sessionsDir = join(homedir(), '.grok', 'sessions');
+    try {
+      const entries = await readdir(sessionsDir, { withFileTypes: true });
+      // Grok 按项目目录组织，每个目录下有 prompt_history.jsonl
+      const dirs = entries
+        .filter((e) => e.isDirectory())
+        .slice(0, limit);
+
+      const sessions: AgentSession[] = [];
+      for (const dir of dirs) {
+        const promptFile = join(sessionsDir, dir.name, 'prompt_history.jsonl');
+        try {
+          const records = await readFile(promptFile, 'utf-8').then((c) =>
+            c.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+          );
+          const fileStat = await stat(promptFile);
+
+          sessions.push({
+            id: dir.name,
+            title: dir.name,
+            project: dir.name,
+            createdAt: fileStat.birthtime.toISOString(),
+            updatedAt: fileStat.mtime.toISOString(),
+            messageCount: records.length,
+            stage: undefined,
+          });
+        } catch {
+          // 如果 prompt_history.jsonl 不存在或不可读则跳过
+        }
+      }
+      return sessions;
+    } catch {
+      return [];
+    }
   }
 
   async ping(): Promise<boolean> {

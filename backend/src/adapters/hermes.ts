@@ -1,9 +1,12 @@
-import { readFile, access } from 'fs/promises';
+import { readFile, access, readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { AgentId, AgentConfig, AgentSession, AgentState } from '../models/agent';
 import { AgentAdapter } from './interface';
 import { parse as parseYaml } from './yaml-lite';
+import { serializeYaml } from '../utils/yaml-serializer';
+import { atomicWrite } from '../utils/atomic-write';
+import { stat } from 'fs/promises';
 
 export class HermesAdapter implements AgentAdapter {
   readonly id: AgentId = 'hermes';
@@ -32,14 +35,57 @@ export class HermesAdapter implements AgentAdapter {
     };
   }
 
-  async writeConfig(_config: AgentConfig): Promise<void> {
-    // Phase 2 实现
-    console.warn('[hermes] writeConfig not yet implemented');
+  async writeConfig(config: AgentConfig): Promise<void> {
+    const raw = { ...config.raw };
+    if (config.model !== undefined) raw.model = config.model;
+    if (config.systemPrompt !== undefined) raw.system_prompt = config.systemPrompt;
+    await atomicWrite(this.getConfigPath(), serializeYaml(raw));
   }
 
-  async readRecentSessions(_limit = 20): Promise<AgentSession[]> {
-    // Phase 2: 读取 ~/.hermes/sessions/
-    return [];
+  async readRecentSessions(limit = 20): Promise<AgentSession[]> {
+    const sessionsDir = join(homedir(), '.hermes', 'sessions');
+    try {
+      const entries = await readdir(sessionsDir, { withFileTypes: true });
+      const dirs = entries
+        .filter((e) => e.isDirectory())
+        .slice(0, limit);
+
+      const sessions: AgentSession[] = [];
+      for (const dir of dirs) {
+        const sessionDir = join(sessionsDir, dir.name);
+        const sessionFiles = await readdir(sessionDir);
+        const jsonFiles = sessionFiles.filter((f) => f.endsWith('.json'));
+
+        let createdAt = '';
+        let updatedAt = '';
+        let messageCount = 0;
+
+        for (const f of jsonFiles) {
+          try {
+            const s = await stat(join(sessionDir, f));
+            if (!createdAt || s.birthtimeMs < new Date(createdAt).getTime()) {
+              createdAt = s.birthtime.toISOString();
+            }
+            if (!updatedAt || s.mtimeMs > new Date(updatedAt).getTime()) {
+              updatedAt = s.mtime.toISOString();
+            }
+            messageCount++;
+          } catch { /* skip */ }
+        }
+
+        sessions.push({
+          id: dir.name,
+          title: dir.name,
+          createdAt,
+          updatedAt,
+          messageCount,
+          stage: undefined,
+        });
+      }
+      return sessions;
+    } catch {
+      return [];
+    }
   }
 
   async ping(): Promise<boolean> {

@@ -1,8 +1,11 @@
-import { readFile, access } from 'fs/promises';
+import { readFile, access, readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { AgentId, AgentConfig, AgentSession, AgentState, AgentStatus } from '../models/agent';
 import { AgentAdapter } from './interface';
+import { serializeJsonc } from '../utils/json-writer';
+import { atomicWrite } from '../utils/atomic-write';
+import { stat } from 'fs/promises';
 
 export class OpenCodeAdapter implements AgentAdapter {
   readonly id: AgentId = 'opencode';
@@ -36,14 +39,49 @@ export class OpenCodeAdapter implements AgentAdapter {
     };
   }
 
-  async writeConfig(_config: AgentConfig): Promise<void> {
-    // Phase 2 实现
-    console.warn('[opencode] writeConfig not yet implemented');
+  async writeConfig(config: AgentConfig): Promise<void> {
+    const raw = { ...config.raw };
+    if (config.model !== undefined) raw.model = config.model;
+    if (config.systemPrompt !== undefined) raw.systemPrompt = config.systemPrompt;
+    if (config.mcpTools !== undefined && raw.mcpServers) {
+      // 保留现有 mcpServers 结构不变
+    }
+    await atomicWrite(this.getConfigPath(), serializeJsonc(raw));
   }
 
-  async readRecentSessions(_limit = 20): Promise<AgentSession[]> {
-    // Phase 2 实现：读取 ~/.config/opencode/sessions/
-    return [];
+  async readRecentSessions(limit = 20): Promise<AgentSession[]> {
+    const sessionsDir = join(homedir(), '.config', 'opencode', 'sessions');
+    try {
+      const entries = await readdir(sessionsDir, { withFileTypes: true });
+      const jsonFiles = entries
+        .filter((e) => e.isFile() && (e.name.endsWith('.json') || e.name.endsWith('.jsonc')))
+        .slice(0, limit);
+
+      const sessions: AgentSession[] = [];
+      for (const file of jsonFiles) {
+        try {
+          const filePath = join(sessionsDir, file.name);
+          const content = await readFile(filePath, 'utf-8');
+          const cleaned = content.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+          const parsed = JSON.parse(cleaned);
+          const fileStat = await stat(filePath);
+
+          sessions.push({
+            id: file.name.replace(/\.(json|jsonc)$/i, ''),
+            title: (parsed.title as string) || (parsed.id as string) || file.name,
+            createdAt: fileStat.birthtime.toISOString(),
+            updatedAt: fileStat.mtime.toISOString(),
+            messageCount: Array.isArray(parsed.messages) ? parsed.messages.length : 1,
+            stage: undefined,
+          });
+        } catch {
+          // 跳过无法解析的文件
+        }
+      }
+      return sessions;
+    } catch {
+      return [];
+    }
   }
 
   async ping(): Promise<boolean> {

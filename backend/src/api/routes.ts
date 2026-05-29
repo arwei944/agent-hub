@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { AgentAdapter } from '../adapters/interface';
 import { WsHub } from '../ws/hub';
+import { AgentConfig } from '../models/agent';
 
 export function createRoutes(adapters: Map<string, AgentAdapter>, wsHub: WsHub): Router {
   const router = Router();
@@ -47,6 +48,33 @@ export function createRoutes(adapters: Map<string, AgentAdapter>, wsHub: WsHub):
       res.json(sessions);
     } catch (err) {
       res.status(500).json({ error: `Failed to read sessions for ${req.params.id}`, detail: String(err) });
+    }
+  });
+
+  // PUT /api/agents/:id/config — 更新 Agent 配置
+  router.put('/agents/:id/config', async (req: Request, res: Response) => {
+    const agentId = req.params.id as string;
+    const adapter = adapters.get(agentId);
+    if (!adapter) {
+      res.status(404).json({ error: `Agent '${agentId}' not found` });
+      return;
+    }
+    try {
+      const partial: Partial<AgentConfig> = req.body;
+      // 合并：先读当前配置，再用请求体覆盖
+      const current = await adapter.readConfig();
+      const merged: AgentConfig = {
+        ...current,
+        ...partial,
+        raw: current.raw, // 保留完整原生配置
+      };
+      await adapter.writeConfig(merged);
+      // 写完后广播新状态
+      const state = await adapter.readState();
+      wsHub.broadcast({ type: 'agent:state', payload: state });
+      res.json(state);
+    } catch (err) {
+      res.status(500).json({ error: `Failed to update config for ${agentId}`, detail: String(err) });
     }
   });
 

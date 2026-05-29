@@ -4,6 +4,9 @@ import { join } from 'path';
 import { AgentId, AgentConfig, AgentSession, AgentState } from '../models/agent';
 import { AgentAdapter } from './interface';
 import { parse as parseToml } from './toml-lite';
+import { serializeToml } from '../utils/toml-serializer';
+import { atomicWrite } from '../utils/atomic-write';
+import { listJsonlFiles, readJsonl } from '../utils/jsonl-reader';
 
 export class CodexAdapter implements AgentAdapter {
   readonly id: AgentId = 'codex';
@@ -38,13 +41,49 @@ export class CodexAdapter implements AgentAdapter {
     };
   }
 
-  async writeConfig(_config: AgentConfig): Promise<void> {
-    console.warn('[codex] writeConfig not yet implemented');
+  async writeConfig(config: AgentConfig): Promise<void> {
+    const raw = { ...config.raw };
+    if (config.model !== undefined) {
+      if (typeof raw.inference === 'object') {
+        (raw.inference as Record<string, unknown>).model = config.model;
+      }
+      if (typeof raw.model === 'object') {
+        (raw.model as Record<string, unknown>).name = config.model;
+      }
+    }
+    if (config.systemPrompt !== undefined) raw.system_prompt = config.systemPrompt;
+    await atomicWrite(this.getConfigPath(), serializeToml(raw));
   }
 
-  async readRecentSessions(_limit = 20): Promise<AgentSession[]> {
-    // Phase 2: 读取 ~/.codex/archived_sessions/ (JSONL)
-    return [];
+  async readRecentSessions(limit = 20): Promise<AgentSession[]> {
+    const sessionsDir = join(homedir(), '.codex', 'archived_sessions');
+    const files = await listJsonlFiles(sessionsDir, limit);
+    const sessions: AgentSession[] = [];
+
+    for (const file of files) {
+      try {
+        const records = await readJsonl(file);
+        if (records.length === 0) continue;
+
+        const first = records[0];
+        const last = records[records.length - 1];
+        const fileName = file.split(/[/\\]/).pop() || '';
+
+        sessions.push({
+          id: fileName.replace(/\.jsonl$/i, ''),
+          title: (first.title as string) || (first.session_id as string) || fileName,
+          project: (first.project as string) || undefined,
+          createdAt: (first.created_at as string) || (first.timestamp as string) || '',
+          updatedAt: (last.created_at as string) || (last.timestamp as string) || '',
+          messageCount: records.length,
+          stage: undefined,
+        });
+      } catch {
+        // skip corrupt files
+      }
+    }
+
+    return sessions;
   }
 
   async ping(): Promise<boolean> {

@@ -11,6 +11,7 @@ import { CodexAdapter } from './adapters/codex';
 import { GrokAdapter } from './adapters/grok';
 import { CursorAdapter } from './adapters/cursor';
 import { AgentState } from './models/agent';
+import { FileWatcher } from './watcher/file-watcher';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
@@ -35,42 +36,50 @@ async function main() {
   // REST API 路由
   app.use('/api', createRoutes(registry.getAll(), wsHub));
 
-  // 定时轮询所有 Agent 状态，变化时广播
+  // Agent 状态缓存，用于检测变化
   let previousStates = new Map<string, AgentState>();
 
-  async function pollAndBroadcast() {
-    try {
-      for (const adapter of registry.getAll().values()) {
-        const state = await adapter.readState().catch(() => null);
-        if (!state) continue;
+  async function readAndBroadcast(adapterId?: string) {
+    const adapters = adapterId
+      ? [registry.get(adapterId)].filter(Boolean)
+      : Array.from(registry.getAll().values());
 
-        const prev = previousStates.get(adapter.id);
-        if (!prev || JSON.stringify(prev) !== JSON.stringify(state)) {
-          previousStates.set(adapter.id, state);
-          wsHub.broadcast({ type: 'agent:state', payload: state });
-        }
+    for (const adapter of adapters) {
+      if (!adapter) continue;
+      const state = await adapter.readState().catch(() => null);
+      if (!state) continue;
+
+      const prev = previousStates.get(adapter.id);
+      if (!prev || JSON.stringify(prev) !== JSON.stringify(state)) {
+        previousStates.set(adapter.id, state);
+        wsHub.broadcast({ type: 'agent:state', payload: state });
       }
-    } catch (err) {
-      console.error('[poll] error:', err);
     }
   }
 
-  // 每 10 秒轮询一次
-  const pollInterval = setInterval(pollAndBroadcast, 10_000);
+  // 文件系统实时监听（事件驱动，秒级响应）
+  const fileWatcher = new FileWatcher(registry.getAll(), (agentId) => {
+    readAndBroadcast(agentId);
+  });
 
-  // 启动后立即轮询一次
-  setTimeout(pollAndBroadcast, 500);
+  // 兜底轮询（每 30 秒，确保文件监听遗漏的变更也能被检测）
+  const pollInterval = setInterval(() => readAndBroadcast(), 30_000);
+
+  // 启动后立即读取一次
+  setTimeout(() => readAndBroadcast(), 500);
 
   server.listen(PORT, () => {
     console.log(`[agent-hub] server running on http://localhost:${PORT}`);
     console.log(`[agent-hub] ws endpoint ws://localhost:${PORT}/ws`);
     console.log(`[agent-hub] registered adapters: ${Array.from(registry.getAll().keys()).join(', ')}`);
+    console.log(`[agent-hub] file watcher active, fallback poll 30s`);
   });
 
   // 优雅退出
   const shutdown = () => {
     console.log('\n[agent-hub] shutting down...');
     clearInterval(pollInterval);
+    fileWatcher.close();
     wsHub.close();
     server.close(() => process.exit(0));
   };

@@ -3,6 +3,8 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { AgentId, AgentConfig, AgentSession, AgentState } from '../models/agent';
 import { AgentAdapter } from './interface';
+import { serializeJsonc } from '../utils/json-writer';
+import { atomicWrite } from '../utils/atomic-write';
 
 export class CursorAdapter implements AgentAdapter {
   readonly id: AgentId = 'cursor';
@@ -50,8 +52,13 @@ export class CursorAdapter implements AgentAdapter {
     };
   }
 
-  async writeConfig(_config: AgentConfig): Promise<void> {
-    console.warn('[cursor] writeConfig not yet implemented');
+  async writeConfig(config: AgentConfig): Promise<void> {
+    const raw = { ...config.raw };
+    if (config.model !== undefined) {
+      raw['cursor.general.model'] = config.model;
+      raw['cursor.chat.model'] = config.model;
+    }
+    await atomicWrite(this.getConfigPath(), serializeJsonc(raw));
   }
 
   async readRecentSessions(_limit = 20): Promise<AgentSession[]> {
