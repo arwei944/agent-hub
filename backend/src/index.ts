@@ -4,9 +4,12 @@ import { createServer } from 'http';
 import { WsHub } from './ws/hub';
 import { createRoutes } from './api/routes';
 import { AdapterRegistry } from './adapters/registry';
-import { AgentAdapter } from './adapters/interface';
 import { OpenCodeAdapter } from './adapters/opencode';
+import { ClaudeAdapter } from './adapters/claude';
 import { HermesAdapter } from './adapters/hermes';
+import { CodexAdapter } from './adapters/codex';
+import { GrokAdapter } from './adapters/grok';
+import { CursorAdapter } from './adapters/cursor';
 import { AgentState } from './models/agent';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -23,8 +26,11 @@ async function main() {
   // 注册 Agent 适配器
   const registry = new AdapterRegistry();
   registry.register(new OpenCodeAdapter());
+  registry.register(new ClaudeAdapter());
   registry.register(new HermesAdapter());
-  // 后续添加: Claude, Codex, Grok, Cursor 适配器
+  registry.register(new CodexAdapter());
+  registry.register(new GrokAdapter());
+  registry.register(new CursorAdapter());
 
   // REST API 路由
   app.use('/api', createRoutes(registry.getAll(), wsHub));

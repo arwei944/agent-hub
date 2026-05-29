@@ -1,7 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
-import type { AgentState, ServerEvent } from '../types';
-import { fetchAgents } from '../api/client';
-import { useWebSocket } from '../hooks/useWebSocket';
+import type { AgentState } from '../types';
 
 const STATUS_COLORS: Record<string, string> = {
   online: '#22c55e',
@@ -17,16 +14,22 @@ const STATUS_LABELS: Record<string, string> = {
   error: '异常',
 };
 
-function AgentCard({ agent }: { agent: AgentState }) {
+function AgentCard({ agent, onClick }: { agent: AgentState; onClick: () => void }) {
   return (
-    <div style={{
-      border: '1px solid #e5e7eb',
-      borderRadius: '12px',
-      padding: '16px',
-      background: '#fff',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-      transition: 'box-shadow 0.2s',
-    }}>
+    <div
+      onClick={onClick}
+      style={{
+        border: '1px solid #e5e7eb',
+        borderRadius: '12px',
+        padding: '16px',
+        background: '#fff',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+        cursor: 'pointer',
+        transition: 'box-shadow 0.2s, border-color 0.2s',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#93c5fd'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.12)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#e5e7eb'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)'; }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
         <span style={{
           width: '10px', height: '10px', borderRadius: '50%',
@@ -58,7 +61,7 @@ function AgentCard({ agent }: { agent: AgentState }) {
       </div>
 
       {agent.recentSessions.length > 0 && (
-        <details>
+        <details onClick={(e) => e.stopPropagation()}>
           <summary style={{ cursor: 'pointer', fontSize: '13px', color: '#3b82f6' }}>
             最近会话 ({agent.recentSessions.length})
           </summary>
@@ -78,66 +81,25 @@ function AgentCard({ agent }: { agent: AgentState }) {
   );
 }
 
-export function Dashboard() {
-  const [agents, setAgents] = useState<AgentState[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // 首次加载
-  useEffect(() => {
-    fetchAgents()
-      .then(setAgents)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  // WebSocket 实时更新
-  const handleWsEvent = useCallback((event: ServerEvent) => {
-    if (event.type === 'agent:state') {
-      setAgents((prev) => {
-        const idx = prev.findIndex((a) => a.id === event.payload.id);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = event.payload;
-          return next;
-        }
-        return [...prev, event.payload];
-      });
-    }
-    if (event.type === 'agent:list') {
-      setAgents(event.payload);
-    }
-  }, []);
-
-  useWebSocket(handleWsEvent);
-
-  if (loading) {
-    return <div style={{ textAlign: 'center', padding: '48px', color: '#6b7280' }}>加载中...</div>;
-  }
-
-  if (error) {
-    return (
-      <div style={{ textAlign: 'center', padding: '48px', color: '#ef4444' }}>
-        <p>连接后端失败：{error}</p>
-        <p style={{ fontSize: '14px', color: '#6b7280' }}>
-          请确保后端已启动：<code>cd backend && npm run dev</code>
-        </p>
-      </div>
-    );
-  }
-
+export function Dashboard({
+  agents,
+  onSelectAgent,
+}: {
+  agents: AgentState[];
+  onSelectAgent: (id: string) => void;
+}) {
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
+    <div>
       <header style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Agent Hub</h1>
+        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>概览</h1>
         <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: '14px' }}>
-          统一智能体管理面板 · {agents.length} 个 Agent · 实时更新
+          统一智能体管理面板 · 实时更新
         </p>
       </header>
 
       {agents.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '48px', color: '#9ca3af' }}>
-          暂无 Agent 数据。
+          暂无 Agent 数据。请检查后端是否正确启动。
         </div>
       ) : (
         <div style={{
@@ -146,7 +108,11 @@ export function Dashboard() {
           gap: '16px',
         }}>
           {agents.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} />
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              onClick={() => onSelectAgent(agent.id)}
+            />
           ))}
         </div>
       )}
