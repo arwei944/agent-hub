@@ -42,10 +42,32 @@ export interface AgentState {
   metadata: Record<string, unknown>;
 }
 
+/** Agent 上报的桥接事件 */
+export interface AgentBridgeEvent {
+  type: 'agent:register' | 'agent:event';
+  agentId: string;
+  name?: string;
+  event?: string;
+  payload?: Record<string, unknown>;
+  timestamp?: string;
+}
+
+/** 桥接事件记录（存储用） */
+export interface BridgeEventRecord {
+  id: string;
+  agentId: string;
+  event: string;
+  payload: Record<string, unknown>;
+  timestamp: string;
+  createdAt: string;
+}
+
 /** 后端推送给前端的事件类型 */
 export type ServerEvent =
   | { type: 'agent:state'; payload: AgentState }
   | { type: 'agent:list'; payload: AgentState[] }
   | { type: 'agent:status'; payload: { id: AgentId; status: AgentStatus } }
   | { type: 'session:update'; payload: { agentId: AgentId; session: AgentSession } }
+  | { type: 'bridge:event'; payload: BridgeEventRecord }
+  | { type: 'bridge:events'; payload: BridgeEventRecord[] }
   | { type: 'error'; payload: { message: string } };

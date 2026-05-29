@@ -12,6 +12,9 @@ import { GrokAdapter } from './adapters/grok';
 import { CursorAdapter } from './adapters/cursor';
 import { AgentState } from './models/agent';
 import { FileWatcher } from './watcher/file-watcher';
+import { ProjectStore } from './api/project-store';
+import { ProjectAssigner } from './watcher/project-assigner';
+import { SearchEngine } from './api/search';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
@@ -33,8 +36,14 @@ async function main() {
   registry.register(new GrokAdapter());
   registry.register(new CursorAdapter());
 
+  // 项目存储
+  const projectStore = new ProjectStore();
+
+  // 搜索引擎
+  const searchEngine = new SearchEngine(registry);
+
   // REST API 路由
-  app.use('/api', createRoutes(registry.getAll(), wsHub));
+  app.use('/api', createRoutes(registry.getAll(), wsHub, projectStore, searchEngine));
 
   // Agent 状态缓存，用于检测变化
   let previousStates = new Map<string, AgentState>();
@@ -62,6 +71,10 @@ async function main() {
     readAndBroadcast(agentId);
   });
 
+  // 项目自动关联（每 60 秒扫描一次）
+  const projectAssigner = new ProjectAssigner(registry, projectStore, wsHub);
+  projectAssigner.start(60_000);
+
   // 兜底轮询（每 30 秒，确保文件监听遗漏的变更也能被检测）
   const pollInterval = setInterval(() => readAndBroadcast(), 30_000);
 
@@ -79,6 +92,7 @@ async function main() {
   const shutdown = () => {
     console.log('\n[agent-hub] shutting down...');
     clearInterval(pollInterval);
+    projectAssigner.stop();
     fileWatcher.close();
     wsHub.close();
     server.close(() => process.exit(0));
